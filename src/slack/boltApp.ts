@@ -3,17 +3,22 @@ import slackWebApi from "@slack/web-api";
 const { WebClient: WebClientCtor } = slackWebApi;
 import {
   decryptBotToken,
+  getEmailUsageHeatmap,
   getSlackUserGmailByWorkspaceAndUser,
   getThreadMappingBySlackThread,
   getWorkspaceById,
   getWorkspaceBySlackTeamId,
   insertThreadSlackThreadOrGet,
+  recordEmailUsageEvent,
 } from "../db/repos.js";
 import { sendGmailReplyFromSlack } from "../gmail/sendReply.js";
 import type { ReplyAttachment } from "../gmail/sendReply.js";
 import { sendNewEmail } from "../gmail/sendNew.js";
 import { ensureCategoryChannel } from "../gmail/sync.js";
+import { renderEmailHeatmapPng } from "./heatmap.js";
 import { createGoogleLinkState, googleLinkUrl } from "../routes/oauthGoogle.js";
+
+const MAILSTATS_DAYS = 371;
 
 export function registerSlackHandlers(app: App): void {
   app.command("/login", async ({ ack, command }) => {
@@ -114,6 +119,69 @@ export function registerSlackHandlers(app: App): void {
     });
   });
 
+  app.command("/mailstats", async ({ ack, respond, command, logger }) => {
+    await ack();
+
+    const teamId = command.team_id;
+    const slackUserId = command.user_id;
+
+    try {
+      const ws = await getWorkspaceBySlackTeamId(teamId);
+      if (!ws) {
+        await respond({ response_type: "ephemeral", text: "Workspace not installed." });
+        return;
+      }
+
+      const heatmap = await getEmailUsageHeatmap({
+        workspaceId: teamId,
+        slackUserId,
+        days: MAILSTATS_DAYS,
+      });
+
+      if (heatmap.total === 0) {
+        await respond({
+          response_type: "ephemeral",
+          text: "No email activity recorded yet — your heatmap will fill in as emails arrive and you reply.",
+        });
+        return;
+      }
+
+      const png = renderEmailHeatmapPng(heatmap.days, {
+        title: "Email activity",
+        days: MAILSTATS_DAYS,
+        total: heatmap.total,
+      });
+
+      const summary = `Here's your email activity over the past year — ${heatmap.total} email${
+        heatmap.total === 1 ? "" : "s"
+      }.`;
+
+      const botToken = decryptBotToken(ws);
+      const web = new WebClientCtor(botToken);
+
+      try {
+        await web.filesUploadV2({
+          channel_id: command.channel_id,
+          filename: "email-activity.png",
+          file: png,
+          initial_comment: summary,
+        });
+      } catch (uploadErr) {
+        logger.warn("Failed to upload mailstats heatmap, falling back to text", uploadErr);
+        await respond({
+          response_type: "ephemeral",
+          text: `${summary}\n(Could not upload the image here — make sure the bot is a member of this channel.)`,
+        });
+      }
+    } catch (e) {
+      logger.error("Failed to build mailstats heatmap", e);
+      await respond({
+        response_type: "ephemeral",
+        text: "Sorry, something went wrong generating your email activity graph.",
+      });
+    }
+  });
+
   app.view("compose_email", async ({ ack, view, body, logger }) => {
     await ack();
 
@@ -145,6 +213,19 @@ export function registerSlackHandlers(app: App): void {
         subject,
         bodyText,
       });
+
+      // Record an outbound email-usage event for the heatmap (best-effort).
+      try {
+        await recordEmailUsageEvent({
+          workspaceId: teamId,
+          slackUserId: userId,
+          direction: "outbound",
+          category: "primary",
+          gmailMessageId: threadId,
+        });
+      } catch (e) {
+        logger.warn("Failed to record outbound compose email-usage event", e);
+      }
 
       // Post sent message as a thread in mail-primary
       const botToken = decryptBotToken(ws);
@@ -244,6 +325,20 @@ export function registerSlackHandlers(app: App): void {
         text: `Could not send email: ${e instanceof Error ? e.message : String(e)}`,
       });
       return;
+    }
+
+    // Record an outbound email-usage event for the heatmap (best-effort).
+    try {
+      if (context.teamId) {
+        await recordEmailUsageEvent({
+          workspaceId: context.teamId,
+          slackUserId: message.user,
+          direction: "outbound",
+          gmailMessageId: mapping.gmail_thread_id,
+        });
+      }
+    } catch (e) {
+      logger.warn("Failed to record outbound reply email-usage event", e);
     }
 
     try {

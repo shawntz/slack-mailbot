@@ -438,3 +438,61 @@ export async function deleteExpiredOAuthStates(): Promise<void> {
   const pool = getPool();
   await pool.query(`DELETE FROM oauth_states WHERE expires_at < NOW()`);
 }
+
+export type EmailUsageDirection = "inbound" | "outbound";
+
+/** Records a single email-usage event. workspace_id is the Slack team id. */
+export async function recordEmailUsageEvent(params: {
+  workspaceId: string;
+  slackUserId: string;
+  direction: EmailUsageDirection;
+  category?: string | null;
+  gmailMessageId?: string | null;
+  occurredAt?: Date;
+}): Promise<void> {
+  const pool = getPool();
+  await pool.query(
+    `INSERT INTO email_usage_events
+      (workspace_id, slack_user_id, direction, category, gmail_message_id, occurred_at)
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()))`,
+    [
+      params.workspaceId,
+      params.slackUserId,
+      params.direction,
+      params.category ?? null,
+      params.gmailMessageId ?? null,
+      params.occurredAt ?? null,
+    ],
+  );
+}
+
+export type EmailUsageHeatmap = {
+  days: { day: string; count: number }[];
+  total: number;
+};
+
+/**
+ * Returns per-day email-usage counts for the last `days` days for a user,
+ * plus the total. Only days with at least one event are returned; the renderer
+ * fills in the zero days.
+ */
+export async function getEmailUsageHeatmap(params: {
+  workspaceId: string;
+  slackUserId: string;
+  days: number;
+}): Promise<EmailUsageHeatmap> {
+  const pool = getPool();
+  const cutoff = new Date(Date.now() - params.days * 24 * 60 * 60 * 1000);
+  const r = await pool.query<{ day: string; count: string }>(
+    `SELECT to_char(date_trunc('day', occurred_at), 'YYYY-MM-DD') AS day,
+            COUNT(*)::bigint AS count
+     FROM email_usage_events
+     WHERE workspace_id = $1 AND slack_user_id = $2 AND occurred_at >= $3
+     GROUP BY 1
+     ORDER BY 1`,
+    [params.workspaceId, params.slackUserId, cutoff],
+  );
+  const daysOut = r.rows.map((row) => ({ day: row.day, count: Number(row.count) }));
+  const total = daysOut.reduce((sum, d) => sum + d.count, 0);
+  return { days: daysOut, total };
+}

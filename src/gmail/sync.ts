@@ -14,6 +14,7 @@ import {
   getWorkspaceBySlackTeamId,
   insertCategoryChannelOrGet,
   insertThreadSlackThreadOrGet,
+  recordEmailUsageEvent,
   releaseGmailMessageClaim,
   updateGmailHistoryId,
   updateThreadSlackLastMessageId,
@@ -156,6 +157,20 @@ async function ingestOneMessage(params: {
     slackChannelId: channelId,
   });
   if (!claimed) return;
+
+  // Record an inbound email-usage event for the heatmap. Best-effort: a failure
+  // here must never break the email sync flow.
+  try {
+    await recordEmailUsageEvent({
+      workspaceId: params.account.slack_team_id,
+      slackUserId: params.account.slack_user_id,
+      direction: "inbound",
+      category: labelToCategory(labels),
+      gmailMessageId: params.messageId,
+    });
+  } catch (e) {
+    console.warn("Failed to record inbound email-usage event", params.messageId, e);
+  }
 
   const fromLine = formatFromForSlack(from);
   const gmailLink = `https://mail.google.com/mail/u/0/#inbox/${params.messageId}`;

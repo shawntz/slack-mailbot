@@ -27,6 +27,7 @@
 - **Reply from Slack** — Type a reply in any email thread and it sends as a real email, complete with your display name and proper threading headers
 - **Compose New Emails** — Use `/compose` to open a modal with To, CC, BCC, Subject, and Body fields. Sent messages appear as threads for reply tracking
 - **Full Attachment Support** — Incoming email attachments are uploaded to Slack. Files you attach in Slack are included in outgoing emails as MIME attachments
+- **Email Activity Heatmap** — Run `/mailstats` to get a GitHub contributions-style calendar heatmap (PNG) of your email usage over the past year, rendered and posted right in Slack
 - **View in Gmail** — Every message includes a link to view the full rich HTML version in Gmail
 - **Real-Time Sync** — Powered by Google Cloud Pub/Sub push notifications, not polling. Emails arrive in Slack within seconds
 - **Privacy First** — Each user gets their own private channels. Tokens are encrypted at rest with AES-256-GCM
@@ -151,6 +152,9 @@ Create a new Slack app at [api.slack.com/apps](https://api.slack.com/apps) and c
 |---------|------------|-------------|
 | `/login` | `{APP_BASE_URL}/slack/events` | Link your Gmail account |
 | `/compose` | `{APP_BASE_URL}/slack/events` | Compose a new email |
+| `/mailstats` | `{APP_BASE_URL}/slack/events` | Show your email activity heatmap for the past year |
+
+> **Note:** Slash commands are registered in the Slack app dashboard (Slack App Configuration → Slash Commands), not in a repo manifest. After deploying, add `/mailstats` there with the description "Show your email activity heatmap for the past year" (no usage hint / arguments required) so the command is available in your workspace.
 
 ### Interactivity & Shortcuts
 
@@ -222,6 +226,12 @@ You can also drag files into the thread — they'll be attached to the outgoing 
 ### Composing new email
 
 Type `/compose` to open a form with To, CC, BCC, Subject, and Body fields. After sending, the email appears as a new thread in #mail-primary so you can track replies.
+
+### Viewing your email activity
+
+Type `/mailstats` in any channel to get a GitHub contributions-style heatmap of your email usage over the past year. The bot records an event whenever an email arrives in your category channels (inbound) and whenever you reply from a thread or send via `/compose` (outbound), then renders those daily counts as a green calendar grid (53 weeks × 7 days) and posts it as a PNG. If you have no activity yet, the bot lets you know the graph will fill in over time.
+
+The heatmap image is uploaded to the channel where you ran the command, so invite the bot to that channel (or run it in one of your `mail-*` channels) if you want the image posted there.
 
 ---
 
